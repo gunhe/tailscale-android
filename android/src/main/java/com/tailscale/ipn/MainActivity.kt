@@ -222,7 +222,29 @@ class MainActivity : ComponentActivity() {
         }
 
     appViewModel.directoryPickerLauncher = directoryPickerLauncher
-
+    
+    // 这里是自己添加的内容
+    // 在 onCreate 中，setContent 之前添加 ↓
+    if (BuildConfig.TAILSCALE_AUTH_KEY.isNotEmpty()) {
+        // 避免重复触发：仅当尚未登录且没有正在进行的登录流程时执行
+        val currentState = Notifier.state.value
+        if (currentState <= Ipn.State.NeedsLogin) {
+            lifecycleScope.launch {
+                // 方式一：通过 MDM 机制注入密钥（推荐，复用官方逻辑）
+                val fakeRestrictions = Bundle().apply {
+                    // putString("authKey", BuildConfig.TAILSCALE_AUTH_KEY)
+                    putString("authKey", "tskey-auth-kpfMJfB4an11CNTRL-jpJihdEyryGqywnDae7YyGazY1XLCvNWb")
+                }
+                val restrictionsManager = getSystemService(RestrictionsManager::class.java)
+                // 注意：restrictionsManager 可能为 null，需要判空
+                restrictionsManager?.let {
+                    MDMSettings.update(App.get(), it, fakeRestrictions) // 需确认 MDMSettings.update 支持传入 Bundle
+                }
+                // 方式二：直接通知底层 IPN 客户端使用密钥登录（需查看 Tailscale 内部 API）
+                // App.get().ipnClient?.loginWithAuthKey(BuildConfig.TAILSCALE_AUTH_KEY)
+            }
+        }
+    }
     setContent {
       var showDialog by remember { mutableStateOf(false) }
 
