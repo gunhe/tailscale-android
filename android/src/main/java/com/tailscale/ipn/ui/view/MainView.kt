@@ -129,7 +129,6 @@ fun MainView(
     loginAtUrl: (String) -> Unit,
     navigation: MainViewNavigation,
     viewModel: MainViewModel,
-    appViewModel: AppViewModel
 ) {
   val currentPingDevice by viewModel.pingViewModel.peer.collectAsState()
   val healthIcon by viewModel.healthIcon.collectAsState()
@@ -223,6 +222,10 @@ fun MainView(
                   ExitNodeStatus(
                       navAction = navigation.onNavigateToExitNodes, viewModel = viewModel)
                 }
+                val pending by viewModel.pendingTaildrop.pendingItems.collectAsState()
+                if (pending.isNotEmpty()) {
+                  TaildropBannerView(viewModel = viewModel.pendingTaildrop)
+                }
                 PeerList(
                     viewModel = viewModel,
                     onNavigateToPeerDetails = navigation.onNavigateToPeerDetails,
@@ -251,6 +254,16 @@ fun MainView(
         ModalBottomSheet(onDismissRequest = { viewModel.onPingDismissal() }) {
           PingView(model = viewModel.pingViewModel)
         }
+      }
+      val showPendingSheet by
+          viewModel.pendingTaildrop.isPresentingPendingItemsList.collectAsState()
+      if (showPendingSheet) {
+        ModalBottomSheet(
+            onDismissRequest = {
+              viewModel.pendingTaildrop.isPresentingPendingItemsList.value = false
+            }) {
+              InlineShareListSheet(viewModel = viewModel.pendingTaildrop)
+            }
       }
     }
   }
@@ -564,6 +577,51 @@ fun PeerList(
   val localClipboardManager = LocalClipboardManager.current
   // Restrict search to devices running API 33+ (see https://github.com/tailscale/corp/issues/27375)
   val enableSearch = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+
+  val renderedPeers =
+      peerList.flatMap { peerSet -> peerSet.peers.map { peer -> peerSet.userID to peer } }
+  val duplicateRenderedStableIDs =
+      renderedPeers.groupBy { (_, peer) -> peer.StableID }.filterValues { it.size > 1 }
+  val duplicateRenderedNodeIDs =
+      renderedPeers.groupBy { (_, peer) -> peer.ID }.filterValues { it.size > 1 }
+
+  val currentNetmap = netmap.value
+  val netmapPeers = currentNetmap?.Peers.orEmpty()
+  val self = currentNetmap?.SelfNode
+  val duplicateNetmapStableIDs = netmapPeers.groupBy { it.StableID }.filterValues { it.size > 1 }
+  val duplicateNetmapNodeIDs = netmapPeers.groupBy { it.ID }.filterValues { it.size > 1 }
+  val selfInPeersByStableID = self != null && netmapPeers.any { it.StableID == self.StableID }
+  val selfInPeersByNodeID = self != null && netmapPeers.any { it.ID == self.ID }
+
+  check(duplicateRenderedStableIDs.isEmpty()) {
+    buildString {
+      append("Duplicate StableIDs in MainView")
+      append("; peerSets=${peerList.size}")
+      append("; renderedPeers=${renderedPeers.size}")
+      append("; netmapPeers=${netmapPeers.size}")
+      append("; duplicateRenderedStableIDs=${duplicateRenderedStableIDs.keys}")
+      append("; duplicateRenderedNodeIDs=${duplicateRenderedNodeIDs.keys}")
+      append("; duplicateNetmapStableIDs=${duplicateNetmapStableIDs.keys}")
+      append("; duplicateNetmapNodeIDs=${duplicateNetmapNodeIDs.keys}")
+      append("; selfNodeID=${self?.ID}")
+      append("; selfStableID=${self?.StableID}")
+      append("; selfInPeersByNodeID=$selfInPeersByNodeID")
+      append("; selfInPeersByStableID=$selfInPeersByStableID")
+      append("; entries=")
+      append(
+          duplicateRenderedStableIDs.entries.joinToString("|") { (stableID, entries) ->
+            "$stableID=[" +
+                entries.joinToString(",") { (setUser, peer) ->
+                  "nodeID=${peer.ID}" +
+                      "/peerUser=${peer.User}" +
+                      "/setUser=$setUser" +
+                      "/self=${self?.ID == peer.ID}"
+                } +
+                "]"
+          })
+    }
+  }
+
   Column(modifier = Modifier.fillMaxSize()) {
     if (enableSearch && FeatureFlags.isEnabled("enable_new_search")) {
       Search(onSearchBarClick)
@@ -637,7 +695,7 @@ fun PeerList(
           var first = true
           peerList.forEach { peerSet ->
             if (!first) {
-              item(key = "user_divider_${peerSet.user?.ID ?: 0L}") { Lists.ItemDivider() }
+              item(key = "user_divider_${peerSet.userID}") { Lists.ItemDivider() }
             }
             first = false
             if (isAndroidTV()) {
@@ -829,5 +887,5 @@ fun MainViewPreview() {
           onNavigateToHealth = {},
           onNavigateToSearch = {}),
       vm,
-      appViewModel)
+  )
 }

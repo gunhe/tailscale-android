@@ -9,7 +9,11 @@ import com.tailscale.ipn.ui.model.Netmap
 import com.tailscale.ipn.ui.model.Tailcfg
 import com.tailscale.ipn.ui.model.UserID
 
-data class PeerSet(val user: Tailcfg.UserProfile?, val peers: List<Tailcfg.Node>)
+data class PeerSet(
+    val userID: UserID,
+    val user: Tailcfg.UserProfile?,
+    val peers: List<Tailcfg.Node>
+)
 
 class PeerCategorizer {
   var peerSets: List<PeerSet> = emptyList()
@@ -19,6 +23,38 @@ class PeerCategorizer {
   fun regenerateGroupedPeers(netmap: Netmap.NetworkMap) {
     val peers: List<Tailcfg.Node> = netmap.Peers ?: return
     val selfNode = netmap.SelfNode
+
+    val duplicateStableIDs = peers.groupBy { it.StableID }.filterValues { it.size > 1 }
+    val duplicateNodeIDs = peers.groupBy { it.ID }.filterValues { it.size > 1 }
+    val selfInPeersByStableID = peers.any { it.StableID == selfNode.StableID }
+    val selfInPeersByNodeID = peers.any { it.ID == selfNode.ID }
+
+    check(
+        duplicateStableIDs.isEmpty() &&
+            duplicateNodeIDs.isEmpty() &&
+            !selfInPeersByStableID &&
+            !selfInPeersByNodeID) {
+          buildString {
+            append("Invalid PeerCategorizer input")
+            append("; peers=${peers.size}")
+            append("; selfNodeID=${selfNode.ID}")
+            append("; selfStableID=${selfNode.StableID}")
+            append("; duplicateStableIDs=${duplicateStableIDs.keys}")
+            append("; duplicateNodeIDs=${duplicateNodeIDs.keys}")
+            append("; selfInPeersByStableID=$selfInPeersByStableID")
+            append("; selfInPeersByNodeID=$selfInPeersByNodeID")
+            if (duplicateStableIDs.isNotEmpty()) {
+              append("; entries=")
+              append(
+                  duplicateStableIDs.entries.joinToString("|") { (stableID, nodes) ->
+                    "$stableID=[" +
+                        nodes.joinToString(",") { node -> "nodeID=${node.ID}/user=${node.User}" } +
+                        "]"
+                  })
+            }
+          }
+        }
+
     var grouped = mutableMapOf<UserID, MutableList<Tailcfg.Node>>()
 
     val mdm = MDMSettings.hiddenNetworkDevices.flow.value.value
@@ -29,7 +65,6 @@ class PeerCategorizer {
     val me = netmap.currentUserProfile()
 
     for (peer in (peers + selfNode)) {
-
       val userId = peer.User
       val profile = netmap.userProfile(userId)
 
@@ -62,6 +97,7 @@ class PeerCategorizer {
             .map { (userId, peers) ->
               val profile = netmap.userProfile(userId)
               PeerSet(
+                  userId,
                   profile,
                   peers.sortedWith { a, b ->
                     when {
@@ -117,13 +153,14 @@ class PeerCategorizer {
                         (it.Addresses ?: emptyList()).fastAny { addr -> addr.contains(searchTerm) }
                   }
               if (matchingPeers.isNotEmpty()) {
-                PeerSet(user, matchingPeers)
+                PeerSet(peerSet.userID, user, matchingPeers)
               } else {
                 null
               }
             }
             .filterNotNull()
-    lastSearchResult = matchingSets
+
+    this.lastSearchResult = matchingSets
     return matchingSets
   }
 }
